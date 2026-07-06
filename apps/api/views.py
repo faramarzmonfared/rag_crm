@@ -3,10 +3,11 @@ from rest_framework import status
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from django.shortcuts import get_object_or_404
 
-from apps.api.serializers import LeadRegistrationSerializer
+from apps.api.serializers import LeadRegistrationSerializer, MessageSerializer
 from apps.chatbot.services import generate_welcome_message
-from apps.leads.models import Message
+from apps.leads.models import Conversation, Lead, Message
 from apps.leads.services import get_or_create_lead_and_conversation
 
 
@@ -55,3 +56,31 @@ class LeadRegisterView(APIView):
             },
             status=response_status
         )
+
+
+class ChatHistoryView(APIView):
+    """API view to retrieve the message history for a specific conversation."""
+
+    def get(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        """Handle GET request to fetch chat history using headers."""
+        lead_token = request.headers.get("Lead-Token")
+        conversation_id = request.headers.get("Conversation-Id")
+
+        if not lead_token or not conversation_id:
+            return Response(
+                {"detail": "Lead-Token and Conversation-Id headers are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate access: ensure the conversation belongs to the lead
+        lead = get_object_or_404(Lead, token=lead_token)
+        conversation = get_object_or_404(
+            Conversation, 
+            id=conversation_id, 
+            lead=lead
+        )
+
+        messages = conversation.messages.all().order_by("timestamp")    # type: ignore[attr-defined]
+        serializer = MessageSerializer(messages, many=True)
+        
+        return Response(serializer.data, status=status.HTTP_200_OK)

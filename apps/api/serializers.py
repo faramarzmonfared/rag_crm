@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from apps.leads.models import Lead
+from apps.leads.models import Lead, Message
 from apps.leads.validators import IranMobileValidator
 
 
@@ -23,3 +23,12 @@ class LeadRegistrationSerializer(serializers.ModelSerializer):
         if not result.is_valid:
             raise serializers.ValidationError("Invalid Iranian mobile number.")
         return str(result.normalized)
+
+
+class MessageSerializer(serializers.ModelSerializer):
+    """Serializer for representing a chat message."""
+
+    class Meta:
+        """Meta configuration for the serializer."""
+        model = Message
+        fields = ["sender", "content", "timestamp"]
