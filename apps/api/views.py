@@ -1,4 +1,6 @@
 import uuid
+
+from django.utils import timezone
 from apps.api.serializers import LeadRegistrationSerializer, MessageSerializer
 from apps.chatbot.pipeline import run_query_understanding
 
@@ -12,7 +14,7 @@ from django.shortcuts import get_object_or_404
 from apps.api.serializers import LeadRegistrationSerializer, MessageSerializer
 from apps.chatbot.services import generate_welcome_message
 from apps.leads.models import Conversation, Lead, Message
-from apps.leads.services import get_or_create_lead_and_conversation
+from apps.leads.services import get_or_create_lead_and_conversation, check_and_close_conversation_if_timeout
 
 
 class LeadRegisterView(APIView):
@@ -107,7 +109,11 @@ class ChatMessageView(APIView):
         lead = get_object_or_404(Lead, token=lead_token)
         conversation = get_object_or_404(Conversation, id=conversation_id, lead=lead)
 
-        # Save user's message
+        # Lazy Check: Close if timeout, start a new one if needed
+        conversation = check_and_close_conversation_if_timeout(conversation)
+        new_conversation_started = str(conversation.id) != conversation_id
+
+        # Cast request.data to dict to resolve Pylance 'Empty' type issue
         data = cast(dict[str, Any], request.data)
         user_text = data.get("message", "").strip()
         if not user_text:
@@ -132,10 +138,14 @@ class ChatMessageView(APIView):
         else:
             # TODO: Stage 2 (Routing), Stage 3 (Retrieval), Stage 4 (Response Generation)
             bot_response_text = f"پاسخ تستی. نیت شناسایی شده: {query_understanding_output.get('intent')}"
-        
-        # Temporary placeholder response
-        bot_response_text = f"پاسخ تستی. نیت شناسایی شده: {query_understanding_output.get('intent')}"
-        
+
+        # Check if LLM decided to end the conversation (e.g., explicit goodbye)
+        end_conversation = query_understanding_output.get("end_conversation", False)
+        if end_conversation:
+            conversation.is_active = False
+            conversation.ended_at = timezone.now()
+            conversation.save()
+
         # Save bot's response
         bot_message = Message.objects.create(
             conversation=conversation,
@@ -147,7 +157,34 @@ class ChatMessageView(APIView):
             {
                 "trace_id": str(trace_id),
                 "bot_message": bot_message.content,
-                "query_understanding": query_understanding_output
+                "query_understanding": query_understanding_output,
+                "new_conversation_id": str(conversation.id) if new_conversation_started else None,      # type: ignore[attr-defined]
+                "conversation_ended": end_conversation
             },
             status=status.HTTP_200_OK
         )
+
+
+class ChatEndView(APIView):
+    """API view to explicitly end a conversation (e.g., on page close)."""
+
+    def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        """Handle POST request to close an active conversation."""
+        lead_token = request.headers.get("Lead-Token")
+        conversation_id = request.headers.get("Conversation-Id")
+
+        if not lead_token or not conversation_id:
+            return Response(
+                {"detail": "Lead-Token and Conversation-Id headers are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        lead = get_object_or_404(Lead, token=lead_token)
+        conversation = get_object_or_404(Conversation, id=conversation_id, lead=lead)
+
+        if conversation.is_active:
+            conversation.is_active = False
+            conversation.ended_at = timezone.now()
+            conversation.save()
+            
+        return Response({"detail": "Conversation ended successfully."}, status=status.HTTP_200_OK)

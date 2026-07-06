@@ -9,3 +9,4 @@ class QueryUnderstandingOutput(BaseModel):
     clean_query: str
     entities: List[str] = []
     direct_response: Optional[str] = None
+    end_conversation: bool = False

@@ -1,7 +1,38 @@
 from datetime import datetime
 from typing import Tuple
 from apps.leads.models import Conversation, Lead
+from datetime import timedelta
+from django.utils import timezone
 
+
+CONVERSATION_TIMEOUT_MINUTES = 30
+
+def check_and_close_conversation_if_timeout(conversation: Conversation) -> Conversation:
+    """
+    Check if the conversation has timed out (30 mins of inactivity).
+    If so, close it and create a new one.
+    
+    Args:
+        conversation: The current active conversation.
+        
+    Returns:
+        The active conversation (either the original or a new one).
+    """
+    if not conversation.is_active:
+        return Conversation.objects.create(lead=conversation.lead)
+
+    last_message = conversation.messages.order_by("-timestamp").first()     # type: ignore[attr-defined]
+    if last_message:
+        time_since_last_msg = timezone.now() - last_message.timestamp
+        if time_since_last_msg > timedelta(minutes=CONVERSATION_TIMEOUT_MINUTES):
+            # Timeout reached, close old conversation
+            conversation.is_active = False
+            conversation.ended_at = timezone.now()
+            conversation.save()
+            # Create and return new conversation
+            return Conversation.objects.create(lead=conversation.lead)
+
+    return conversation
 
 def get_or_create_lead_and_conversation(
     first_name: str,
