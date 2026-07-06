@@ -1,5 +1,6 @@
 from django.db import models
 from apps.leads.models import Message
+from typing import Any
 
 
 class Intent(models.TextChoices):
@@ -75,3 +76,65 @@ class PipelineLog(models.Model):
     def __str__(self) -> str:
         """Return string representation of the pipeline log."""
         return f"Log {self.id} - {self.stage} - {self.trace_id}"  # type: ignore[attr-defined]
+
+
+class BotPersona(models.Model):
+    """Defines the chatbot's identity, tone, and brand guidelines."""
+
+    name = models.CharField(max_length=100, verbose_name="نام شخصیت")
+    identity_description = models.TextField(verbose_name="توضیحات هویت و برند")
+    tone_of_voice = models.CharField(max_length=255, verbose_name="لحن گفتار")
+    is_active = models.BooleanField(default=False, verbose_name="فعال")
+
+    class Meta:
+        """Meta configuration for BotPersona."""
+        verbose_name = "شخصیت بات"
+        verbose_name_plural = "شخصیت‌های بات"
+
+    def __str__(self) -> str:
+        """Return string representation of the bot persona."""
+        return self.name
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Ensure only one persona is active at a time."""
+        if self.is_active:
+            BotPersona.objects.filter(is_active=True).exclude(pk=self.pk).update(is_active=False)  # type: ignore[attr-defined]
+        super().save(*args, **kwargs)
+
+
+class PromptTemplate(models.Model):
+    """Stores system and human prompts for different pipeline stages."""
+
+    class Stage(models.TextChoices):
+        """Enum for prompt stages."""
+        WELCOME_MESSAGE = "welcome_message", "پیام خوش‌آمدگویی"
+        QUERY_UNDERSTANDING = "query_understanding", "درک درخواست کاربر"
+        RESPONSE_GENERATION = "response_generation", "تولید پاسخ نهایی"
+        HANDOFF = "handoff", "تحویل به انسان"
+
+    persona = models.ForeignKey(
+        BotPersona,
+        on_delete=models.CASCADE,
+        related_name="prompts",
+        verbose_name="شخصیت بات"
+    )
+    stage = models.CharField(max_length=30, choices=Stage.choices, verbose_name="مرحله")
+    system_prompt = models.TextField(
+        verbose_name="پرامپت سیستم",
+        help_text="متغیرهای مجاز: {identity_description}, {tone_of_voice}"
+    )
+    human_prompt = models.TextField(
+        verbose_name="پرامپت کاربر (شامل متغیرها)",
+        help_text="برای welcome_message متغیرها: {first_name}, {context}"
+    )
+    created_at = models.DateTimeField(auto_now_add=True, verbose_name="تاریخ ایجاد")
+
+    class Meta:
+        """Meta configuration for PromptTemplate."""
+        verbose_name = "قالب پرامپت"
+        verbose_name_plural = "قالب‌های پرامپت"
+        unique_together = ("persona", "stage")
+
+    def __str__(self) -> str:
+        """Return string representation of the prompt template."""
+        return f"{self.persona.name} - {self.get_stage_display()}"  # type: ignore[attr-defined]

@@ -1,35 +1,82 @@
 import logging
 from datetime import datetime
+from typing import Optional
+
+from django.utils import timezone
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+
+from apps.chatbot.models import BotPersona, PromptTemplate
 from apps.leads.models import Lead
+from config.llm_config import get_llm
 
 logger = logging.getLogger(__name__)
+
 
 def generate_welcome_message(
     lead: Lead, 
     is_new: bool, 
-    last_conversation_at: datetime | None
+    last_conversation_at: Optional[datetime]
 ) -> str:
     """
-    Generate a personalized welcome message using a lightweight LLM call.
-    Uses hardcoded fallbacks if the LLM call fails.
-    
-    Args:
-        lead: The Lead object.
-        is_new: True if the lead is completely new.
-        last_conversation_at: Timestamp of the last conversation, if returning.
+    Generate a personalized welcome message using an LLM and DB-driven prompts.
+    Uses hardcoded fallbacks if DB records or LLM call fail.
     """
-    # TODO: Replace with actual LangChain/LLM call later
+    # Hardcoded fallbacks
+    if is_new:
+        fallback_msg = f"سلام {lead.first_name} عزیز! به آموزشگاه ما خوش آمدید."
+    elif last_conversation_at:
+        fallback_msg = f"سلام {lead.first_name} عزیز! خوش برگشتید."
+    else:
+        fallback_msg = f"سلام {lead.first_name} عزیز!"
+
     try:
+        # Fetch active persona and prompt template from DB
+        persona = BotPersona.objects.filter(is_active=True).first()
+        if not persona:
+            logger.warning("No active BotPersona found. Using fallback message.")
+            return fallback_msg
+
+        prompt_template = PromptTemplate.objects.filter(
+            persona=persona, 
+            stage=PromptTemplate.Stage.WELCOME_MESSAGE
+        ).first()
+        
+        if not prompt_template:
+            logger.warning("No WELCOME_MESSAGE PromptTemplate found. Using fallback message.")
+            return fallback_msg
+
+        llm = get_llm("response")
+        
+        # Build context string
         if is_new:
-            fallback_msg = f"سلام {lead.first_name} عزیز! به آموزشگاه ما خوش آمدید. چطور می‌توانم کمکتان کنم؟"
+            context = "این کاربر کاملاً جدید است و برای اولین بار با ما چت می‌کند."
         elif last_conversation_at:
-            # In the future, LLM will use this to say "دیروز رفتی" or "مدتی نبودید"
-            fallback_msg = f"سلام {lead.first_name} عزیز! خوش برگشتید. چطور می‌توانم کمکتان کنم؟"
+            now = timezone.now()
+            days_ago = (now - last_conversation_at).days
+            if days_ago == 0:
+                context = "این کاربر امروز قبلاً با ما چت کرده است."
+            else:
+                context = f"این کاربر قبلاً با ما چت کرده است. آخرین مکالمه حدود {days_ago} روز پیش بوده است."
         else:
-            # Fallback for edge cases (should not normally hit this if logic is correct)
-            fallback_msg = f"سلام {lead.first_name} عزیز!"
-            
-        return fallback_msg
+            context = "این کاربر قبلاً با ما چت کرده است."
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", prompt_template.system_prompt),
+            ("human", prompt_template.human_prompt),
+        ])
+
+        chain = prompt | llm | StrOutputParser()
+        
+        welcome_text = chain.invoke({
+            "identity_description": persona.identity_description,
+            "tone_of_voice": persona.tone_of_voice,
+            "first_name": lead.first_name,
+            "context": context
+        })
+        
+        return welcome_text.strip()
+
     except Exception as e:
         logger.error("Failed to generate welcome message via LLM: %s", e)
-        return f"سلام! به آموزشگاه ما خوش آمدید."
+        return fallback_msg
