@@ -1,3 +1,7 @@
+import uuid
+from apps.api.serializers import LeadRegistrationSerializer, MessageSerializer
+from apps.chatbot.pipeline import run_query_understanding
+
 from typing import Any, cast
 from rest_framework import status
 from rest_framework.request import Request
@@ -84,3 +88,66 @@ class ChatHistoryView(APIView):
         serializer = MessageSerializer(messages, many=True)
         
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class ChatMessageView(APIView):
+    """API view to receive a user message, process it, and return the bot response."""
+
+    def post(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        """Handle POST request to process a chat message."""
+        lead_token = request.headers.get("Lead-Token")
+        conversation_id = request.headers.get("Conversation-Id")
+
+        if not lead_token or not conversation_id:
+            return Response(
+                {"detail": "Lead-Token and Conversation-Id headers are required."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        lead = get_object_or_404(Lead, token=lead_token)
+        conversation = get_object_or_404(Conversation, id=conversation_id, lead=lead)
+
+        # Save user's message
+        data = cast(dict[str, Any], request.data)
+        user_text = data.get("message", "").strip()
+        if not user_text:
+            return Response({"detail": "Message cannot be empty."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        user_message = Message.objects.create(
+            conversation=conversation,
+            sender=Message.Sender.USER,
+            content=user_text
+        )
+
+        # Generate a unique trace_id for this pipeline execution
+        trace_id = uuid.uuid4()
+
+        # Stage 1: Query Understanding
+        query_understanding_output = run_query_understanding(user_message, trace_id)
+
+        # Short-circuit check: if LLM provided a direct response, skip the rest
+        direct_response = query_understanding_output.get("direct_response")
+        if direct_response:
+            bot_response_text = direct_response
+        else:
+            # TODO: Stage 2 (Routing), Stage 3 (Retrieval), Stage 4 (Response Generation)
+            bot_response_text = f"پاسخ تستی. نیت شناسایی شده: {query_understanding_output.get('intent')}"
+        
+        # Temporary placeholder response
+        bot_response_text = f"پاسخ تستی. نیت شناسایی شده: {query_understanding_output.get('intent')}"
+        
+        # Save bot's response
+        bot_message = Message.objects.create(
+            conversation=conversation,
+            sender=Message.Sender.BOT,
+            content=bot_response_text
+        )
+
+        return Response(
+            {
+                "trace_id": str(trace_id),
+                "bot_message": bot_message.content,
+                "query_understanding": query_understanding_output
+            },
+            status=status.HTTP_200_OK
+        )
