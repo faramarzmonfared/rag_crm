@@ -1,3 +1,5 @@
+import uuid
+
 from django.core.exceptions import ValidationError
 from django.db import models
 
@@ -18,6 +20,12 @@ class Lead(models.Model):
     first_name = models.CharField(max_length=100, verbose_name="نام")
     last_name = models.CharField(max_length=100, verbose_name="نام خانوادگی")
     phone_number = models.CharField(max_length=15, unique=True, verbose_name="شماره تماس")
+    token = models.UUIDField(
+        default=uuid.uuid4, 
+        editable=False, 
+        unique=True, 
+        verbose_name="توکن"
+    )
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.NEW, verbose_name="وضعیت")
     aggregated_summary = models.TextField(blank=True, verbose_name="خلاصه تجمیعی مکالمات")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="تاریخ ثبت")
