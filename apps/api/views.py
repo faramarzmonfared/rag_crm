@@ -2,7 +2,7 @@ import uuid
 
 from django.utils import timezone
 from apps.api.serializers import LeadRegistrationSerializer, MessageSerializer
-from apps.chatbot.pipeline import run_query_understanding
+from apps.chatbot.pipeline import run_query_understanding, run_routing_and_retrieval
 
 from typing import Any, cast
 from rest_framework import status
@@ -133,11 +133,19 @@ class ChatMessageView(APIView):
 
         # Short-circuit check: if LLM provided a direct response, skip the rest
         direct_response = query_understanding_output.get("direct_response")
+        print("Direct Response from Query Understanding:", direct_response)  # Debugging log
         if direct_response:
             bot_response_text = direct_response
         else:
-            # TODO: Stage 2 (Routing), Stage 3 (Retrieval), Stage 4 (Response Generation)
-            bot_response_text = f"پاسخ تستی. نیت شناسایی شده: {query_understanding_output.get('intent')}"
+            # Stage 2 & 3: Routing and Retrieval
+            pass
+            retrieved_chunks = run_routing_and_retrieval(user_message, trace_id, query_understanding_output)
+            
+            # # TODO: Stage 4 (Response Generation using retrieved_chunks)
+            if retrieved_chunks:
+                bot_response_text = "اطلاعات پیدا شد (تستی): " + retrieved_chunks[0]["content"][:50]
+            else:
+                bot_response_text = "متاسفانه اطلاعاتی پیدا نشد. آیا می‌توانید دقیق‌تر بپرسید؟"
 
         # Check if LLM decided to end the conversation (e.g., explicit goodbye)
         end_conversation = query_understanding_output.get("end_conversation", False)
