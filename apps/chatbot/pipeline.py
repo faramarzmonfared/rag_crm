@@ -3,7 +3,7 @@ import time
 import uuid
 from typing import Any
 
-from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
 from apps.chatbot.models import BotPersona, PipelineLog, PromptTemplate, Intent
@@ -222,3 +222,91 @@ def run_routing_and_retrieval(message: Message, trace_id: uuid.UUID, query_outpu
             input_data={"intent": intent, "clean_query": clean_query},
         )
         return []
+
+
+def run_response_generation(
+    message: Message, 
+    trace_id: uuid.UUID, 
+    query_output: dict[str, Any], 
+    retrieved_chunks: list[dict[str, Any]]
+) -> str:
+    """
+    Execute the Response Generation stage using retrieved context.
+    
+    Args:
+        message: The user's Message object.
+        trace_id: The unique ID tracking this pipeline execution.
+        query_output: The output dictionary from run_query_understanding.
+        retrieved_chunks: The list of chunks retrieved from the vector database.
+        
+    Returns:
+        The generated bot response string.
+    """
+    start_time = time.time()
+    stage = PipelineLog.Stage.RESPONSE_GENERATION
+    clean_query = query_output.get("clean_query", "")
+    
+    try:
+        persona = BotPersona.objects.filter(is_active=True).first()
+        if not persona:
+            raise ValueError("No active BotPersona found.")
+            
+        prompt_template = PromptTemplate.objects.filter(
+            persona=persona,
+            stage=PromptTemplate.Stage.RESPONSE_GENERATION
+        ).first()
+        
+        if not prompt_template:
+            raise ValueError("No RESPONSE_GENERATION PromptTemplate found.")
+
+        llm = get_llm("response")
+        
+        # Format chunks into a single context string
+        context_str = "\n\n".join([chunk["content"] for chunk in retrieved_chunks])
+        
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", prompt_template.system_prompt),
+            ("human", prompt_template.human_prompt)
+        ])
+        
+        chain = prompt | llm | StrOutputParser()
+        
+        response_text = chain.invoke({
+            "identity_description": persona.identity_description,
+            "tone_of_voice": persona.tone_of_voice,
+            "context": context_str,
+            "user_message": clean_query
+        })
+        
+        latency_ms = int((time.time() - start_time) * 1000)
+        
+        # Log successful execution
+        PipelineLog.objects.create(
+            message=message,
+            trace_id=trace_id,
+            stage=stage,
+            outcome=PipelineLog.Outcome.SUCCESS,
+            model_name=llm.model,  # type: ignore[attr-defined]
+            latency_ms=latency_ms,
+            input_data={"user_message": clean_query, "context_length": len(context_str)},
+            output_data={"response": response_text[:200]} # Log first 200 chars
+        )
+        
+        return response_text.strip()
+
+    except Exception as e:
+        logger.error("Response Generation failed: %s", e)
+        latency_ms = int((time.time() - start_time) * 1000)
+        
+        PipelineLog.objects.create(
+            message=message,
+            trace_id=trace_id,
+            stage=stage,
+            outcome=PipelineLog.Outcome.FAILED_HARD,
+            latency_ms=latency_ms,
+            error_message=str(e),
+            input_data={"user_message": clean_query},
+        )
+        
+        return "An error occurred while processing the response. Please try again later."
+    

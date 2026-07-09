@@ -2,7 +2,7 @@ import uuid
 
 from django.utils import timezone
 from apps.api.serializers import LeadRegistrationSerializer, MessageSerializer
-from apps.chatbot.pipeline import run_query_understanding, run_routing_and_retrieval
+from apps.chatbot.pipeline import run_query_understanding, run_routing_and_retrieval, run_response_generation
 
 from typing import Any, cast
 from rest_framework import status
@@ -111,7 +111,7 @@ class ChatMessageView(APIView):
 
         # Lazy Check: Close if timeout, start a new one if needed
         conversation = check_and_close_conversation_if_timeout(conversation)
-        new_conversation_started = str(conversation.id) != conversation_id
+        new_conversation_started = str(conversation.id) != conversation_id      # type: ignore[attr-defined]
 
         # Cast request.data to dict to resolve Pylance 'Empty' type issue
         data = cast(dict[str, Any], request.data)
@@ -133,19 +133,18 @@ class ChatMessageView(APIView):
 
         # Short-circuit check: if LLM provided a direct response, skip the rest
         direct_response = query_understanding_output.get("direct_response")
-        print("Direct Response from Query Understanding:", direct_response)  # Debugging log
+        
         if direct_response:
             bot_response_text = direct_response
         else:
             # Stage 2 & 3: Routing and Retrieval
-            pass
             retrieved_chunks = run_routing_and_retrieval(user_message, trace_id, query_understanding_output)
-            
-            # # TODO: Stage 4 (Response Generation using retrieved_chunks)
+            # Stage 4: Response Generation
             if retrieved_chunks:
-                bot_response_text = "اطلاعات پیدا شد (تستی): " + retrieved_chunks[0]["content"][:50]
+                bot_response_text = run_response_generation(user_message, trace_id, query_understanding_output, retrieved_chunks)
             else:
-                bot_response_text = "متاسفانه اطلاعاتی پیدا نشد. آیا می‌توانید دقیق‌تر بپرسید؟"
+                # If no chunks found, this is technically an UNCLEAR_UNANSWERABLE state -> triggers Handoff later
+                bot_response_text = "متاسفانه اطلاعاتی در پایگاه داده برای این سوال پیدا نشد. درخواست شما برای پیگیری به کارشناسان ما ارجاع داده می‌شود."
 
         # Check if LLM decided to end the conversation (e.g., explicit goodbye)
         end_conversation = query_understanding_output.get("end_conversation", False)
