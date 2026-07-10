@@ -15,6 +15,12 @@ from pgvector.django import CosineDistance
 from config.embedding_config import get_embedding_model
 from apps.knowledgebase.models import Chunk, KnowledgeBaseSource
 
+import os
+from apps.leads.models import Lead
+from apps.chatbot.sms import send_sms
+from apps.chatbot.services import is_within_working_hours
+from django.utils import timezone
+
 logger = logging.getLogger(__name__)
 
 
@@ -309,4 +315,89 @@ def run_response_generation(
         )
         
         return "An error occurred while processing the response. Please try again later."
+
+
+import os
+from apps.leads.models import Lead
+from apps.chatbot.sms import send_sms
+from datetime import datetime
+
+def trigger_human_handoff(message: Message, trace_id: uuid.UUID, reason: str = "unanswerable") -> str:
+    """
+    Trigger the Human Handoff process.
+    Updates Lead status, checks working hours, sends SMS, and returns user message.
+    
+    Args:
+        message: The user's Message object.
+        trace_id: The unique ID tracking this pipeline execution.
+        reason: The reason for handoff (e.g., 'unanswerable', 'complaint').
+        
+    Returns:
+        The response string to send to the user.
+    """
+    start_time = time.time()
+    stage = PipelineLog.Stage.HANDOFF
+    
+    try:
+        lead = message.conversation.lead
+        
+        # 1. Update Lead Status
+        lead.status = Lead.Status.NEEDS_FOLLOWUP
+        lead.save()
+        
+        # 2. Check Working Hours
+        is_working_hours = is_within_working_hours()
+        
+        # 3. Generate User Message based on working hours
+        if is_working_hours:
+            user_msg = (
+                "پیام شما دریافت شد. همکاران ما در اسرع وقت با شما تماس خواهند گرفت. "
+                "لطفاً منتظر پاسخ از واحد پشتیبانی باشید."
+            )
+            sms_schedule = None # Send immediately
+        else:
+            user_msg = (
+                "در حال حاضر خارج از ساعات کاری هستیم. درخواست شما ثبت شد و "
+                "اولین ساعت کاری بعدی، همکاران ما با شما تماس خواهند گرفت."
+            )
+            # Schedule for next working day morning (simplified for stub)
+            sms_schedule = "next_working_day_morning" 
+            
+        # 4. Send SMS to Support Team (Stub)
+        support_phone = "09120000000" # Placeholder for support team number
+        sms_text = f"New Lead Followup Required!\nLead: {lead.first_name} {lead.last_name}\nPhone: {lead.phone_number}\nReason: {reason}\nQuestion: {message.content[:50]}"
+        send_sms(support_phone, sms_text, sms_schedule)
+        
+        latency_ms = int((time.time() - start_time) * 1000)
+        
+        # Log successful execution
+        PipelineLog.objects.create(
+            message=message,
+            trace_id=trace_id,
+            stage=stage,
+            intent=reason,
+            outcome=PipelineLog.Outcome.SUCCESS,
+            latency_ms=latency_ms,
+            input_data={"user_message": message.content, "is_working_hours": is_working_hours},
+            output_data={"user_response": user_msg, "sms_sent": True},
+            decision_reason=f"Handoff triggered due to: {reason}"
+        )
+        
+        return user_msg
+
+    except Exception as e:
+        logger.error("Human Handoff failed: %s", e)
+        latency_ms = int((time.time() - start_time) * 1000)
+        
+        PipelineLog.objects.create(
+            message=message,
+            trace_id=trace_id,
+            stage=stage,
+            outcome=PipelineLog.Outcome.FAILED_HARD,
+            latency_ms=latency_ms,
+            error_message=str(e),
+            input_data={"user_message": message.content},
+        )
+        
+        return "An error occurred during escalation. Please try again later."
     
