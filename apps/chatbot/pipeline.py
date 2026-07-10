@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.output_parsers import JsonOutputParser, StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from apps.chatbot.models import BotPersona, PipelineLog, PromptTemplate, Intent
+from apps.chatbot.models import BotPersona, PipelineLog, PromptTemplate, Intent, ContactInfo
 from apps.chatbot.schemas import QueryUnderstandingOutput
 from apps.leads.models import Message
 from config.llm_config import get_llm
@@ -75,6 +75,13 @@ def run_query_understanding(message: Message, trace_id: uuid.UUID) -> dict[str, 
             ("system", prompt_template.system_prompt),
             ("human", prompt_template.human_prompt)
         ])
+
+        is_working_hours = is_within_working_hours()
+        working_hours_context = (
+            "در حال حاضر در ساعات کاری آموزشگاه هستیم و پشتیبانان آنلاین هستند."
+            if is_working_hours else
+            "در حال حاضر خارج از ساعات کاری آموزشگاه هستیم و پشتیبانان آفلاین هستند."
+        )
         
         chain = prompt | llm | parser
         
@@ -88,6 +95,7 @@ def run_query_understanding(message: Message, trace_id: uuid.UUID) -> dict[str, 
             "user_message": message.content,
             "valid_intents": valid_intents,  
             "short_circuit_intents": short_circuit_intents, 
+            "working_hours_context": working_hours_context,
             "format_instructions": parser.get_format_instructions()
         })
         
@@ -317,23 +325,15 @@ def run_response_generation(
         return "An error occurred while processing the response. Please try again later."
 
 
-import os
-from apps.leads.models import Lead
-from apps.chatbot.sms import send_sms
-from datetime import datetime
-
-def trigger_human_handoff(message: Message, trace_id: uuid.UUID, reason: str = "unanswerable") -> str:
+def trigger_human_handoff(message: Message, trace_id: uuid.UUID, reason: str = "unanswerable") -> None:
     """
-    Trigger the Human Handoff process.
-    Updates Lead status, checks working hours, sends SMS, and returns user message.
+    Trigger the Human Handoff backend process.
+    Updates Lead status, checks working hours for SMS scheduling, and sends SMS.
     
     Args:
         message: The user's Message object.
         trace_id: The unique ID tracking this pipeline execution.
-        reason: The reason for handoff (e.g., 'unanswerable', 'complaint').
-        
-    Returns:
-        The response string to send to the user.
+        reason: The reason for handoff.
     """
     start_time = time.time()
     stage = PipelineLog.Stage.HANDOFF
@@ -345,31 +345,21 @@ def trigger_human_handoff(message: Message, trace_id: uuid.UUID, reason: str = "
         lead.status = Lead.Status.NEEDS_FOLLOWUP
         lead.save()
         
-        # 2. Check Working Hours
+        # 2. Check Working Hours for SMS Scheduling
         is_working_hours = is_within_working_hours()
+        sms_schedule = None if is_working_hours else "next_working_day_morning"
         
-        # 3. Generate User Message based on working hours
-        if is_working_hours:
-            user_msg = (
-                "پیام شما دریافت شد. همکاران ما در اسرع وقت با شما تماس خواهند گرفت. "
-                "لطفاً منتظر پاسخ از واحد پشتیبانی باشید."
-            )
-            sms_schedule = None # Send immediately
+        # 3. Send SMS to Support Team (Stub)
+        support_contacts = ContactInfo.objects.filter(is_support_number=True)
+        if not support_contacts.exists():
+            logger.warning("No support numbers configured in ContactInfo.")
         else:
-            user_msg = (
-                "در حال حاضر خارج از ساعات کاری هستیم. درخواست شما ثبت شد و "
-                "اولین ساعت کاری بعدی، همکاران ما با شما تماس خواهند گرفت."
-            )
-            # Schedule for next working day morning (simplified for stub)
-            sms_schedule = "next_working_day_morning" 
-            
-        # 4. Send SMS to Support Team (Stub)
-        support_phone = "09120000000" # Placeholder for support team number
-        sms_text = f"New Lead Followup Required!\nLead: {lead.first_name} {lead.last_name}\nPhone: {lead.phone_number}\nReason: {reason}\nQuestion: {message.content[:50]}"
-        send_sms(support_phone, sms_text, sms_schedule)
+            sms_text = f"New Lead Followup Required!\nLead: {lead.first_name} {lead.last_name}\nPhone: {lead.phone_number}\nReason: {reason}\nQuestion: {message.content[:50]}"
+
+            for contact in support_contacts:
+                send_sms(contact.value, sms_text, sms_schedule)
         
         latency_ms = int((time.time() - start_time) * 1000)
-        
         # Log successful execution
         PipelineLog.objects.create(
             message=message,
@@ -379,11 +369,9 @@ def trigger_human_handoff(message: Message, trace_id: uuid.UUID, reason: str = "
             outcome=PipelineLog.Outcome.SUCCESS,
             latency_ms=latency_ms,
             input_data={"user_message": message.content, "is_working_hours": is_working_hours},
-            output_data={"user_response": user_msg, "sms_sent": True},
+            output_data={"sms_sent": True, "sms_schedule": sms_schedule},
             decision_reason=f"Handoff triggered due to: {reason}"
         )
-        
-        return user_msg
 
     except Exception as e:
         logger.error("Human Handoff failed: %s", e)
@@ -398,6 +386,3 @@ def trigger_human_handoff(message: Message, trace_id: uuid.UUID, reason: str = "
             error_message=str(e),
             input_data={"user_message": message.content},
         )
-        
-        return "An error occurred during escalation. Please try again later."
-    

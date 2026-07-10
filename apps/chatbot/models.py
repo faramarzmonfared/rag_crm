@@ -182,3 +182,64 @@ class WorkingDay(models.Model):
     def __str__(self) -> str:
         """Return string representation of the working day."""
         return self.get_day_display()  # type: ignore[attr-defined]
+
+
+class Institution(models.Model):
+    """Represents the educational institution details (Singleton pattern)."""
+
+    name = models.CharField(max_length=200, verbose_name="نام موسسه")
+    address = models.TextField(blank=True, verbose_name="آدرس")
+    latitude = models.FloatField(null=True, blank=True, verbose_name="طول جغرافیایی")
+    longitude = models.FloatField(null=True, blank=True, verbose_name="عرض جغرافیایی")
+    is_active = models.BooleanField(default=False, verbose_name="فعال")
+
+    class Meta:
+        """Meta configuration for Institution."""
+        verbose_name = "موسسه"
+        verbose_name_plural = "موسسه‌ها"
+
+    def __str__(self) -> str:
+        """Return string representation of the institution."""
+        return self.name
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        """Ensure only one institution is active at a time."""
+        if self.is_active:
+            Institution.objects.filter(is_active=True).exclude(pk=self.pk).update(is_active=False)  # type: ignore[attr-defined]
+        super().save(*args, **kwargs)
+
+
+class ContactInfo(models.Model):
+    """Stores various contact methods for the institution."""
+
+    class ContactType(models.TextChoices):
+        """Enum for contact types."""
+        MOBILE = "mobile", "موبایل"
+        LANDLINE = "landline", "تلفن ثابت"
+        EMAIL = "email", "ایمیل"
+        WHATSAPP = "whatsapp", "واتساپ"
+        TELEGRAM = "telegram", "تلگرام"
+        BALE = "bale", "بله"
+
+    institution = models.ForeignKey(
+        Institution, 
+        on_delete=models.CASCADE, 
+        related_name="contacts", 
+        verbose_name="موسسه"
+    )
+    type = models.CharField(max_length=20, choices=ContactType.choices, verbose_name="نوع تماس")
+    value = models.CharField(max_length=100, verbose_name="مقدار")
+    is_support_number = models.BooleanField(
+        default=False, 
+        verbose_name="شماره پشتیبانی (برای ارسال پیامک سیستم)",
+        help_text="اگر فعال باشد، پیامک‌های ارجاع به انسان به این شماره ارسال می‌شود."
+    )
+
+    class Meta:
+        """Meta configuration for ContactInfo."""
+        verbose_name = "اطلاعات تماس"
+        verbose_name_plural = "اطلاعات تماس‌ها"
+
+    def __str__(self) -> str:
+        """Return string representation of the contact info."""
+        return f"{self.get_type_display()}: {self.value}"  # type: ignore[attr-defined]

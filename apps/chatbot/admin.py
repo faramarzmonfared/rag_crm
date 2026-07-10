@@ -1,7 +1,7 @@
 from django import forms
 from django.contrib import admin
 
-from apps.chatbot.models import BotPersona, PipelineLog, PromptTemplate, Shift, WorkingDay
+from apps.chatbot.models import BotPersona, PipelineLog, PromptTemplate, Shift, WorkingDay, Institution, ContactInfo
 from django.core.exceptions import ValidationError
 
 @admin.register(PipelineLog)
@@ -76,3 +76,16 @@ class WorkingDayAdmin(admin.ModelAdmin):
 class ShiftAdmin(admin.ModelAdmin):
     """Admin configuration for Shift model."""
     list_display = ["name", "start_time", "end_time"]
+
+
+@admin.register(Institution)
+class InstitutionAdmin(admin.ModelAdmin):
+    """Admin configuration for Institution model."""
+    list_display = ("name", "address", "is_active")
+    list_filter = ("is_active",)
+
+@admin.register(ContactInfo)
+class ContactInfoAdmin(admin.ModelAdmin):
+    """Admin configuration for ContactInfo model."""
+    list_display = ("institution", "type", "value", "is_support_number")
+    list_filter = ("type", "is_support_number")
