@@ -138,3 +138,47 @@ class PromptTemplate(models.Model):
     def __str__(self) -> str:
         """Return string representation of the prompt template."""
         return f"{self.persona.name} - {self.get_stage_display()}"  # type: ignore[attr-defined]
+
+
+class Shift(models.Model):
+    """Represents a generic working shift (e.g., Morning, Evening)."""
+
+    name = models.CharField(max_length=100, verbose_name="نام شیفت")
+    start_time = models.TimeField(verbose_name="ساعت شروع")
+    end_time = models.TimeField(verbose_name="ساعت پایان")
+
+    class Meta:
+        """Meta configuration for Shift."""
+        verbose_name = "شیفت کاری"
+        verbose_name_plural = "شیفت‌های کاری"
+
+    def __str__(self) -> str:
+        """Return string representation of the shift."""
+        return f"{self.name} ({self.start_time:%H:%M} - {self.end_time:%H:%M})"
+
+
+class WorkingDay(models.Model):
+    """Assigns shifts to specific days of the week."""
+
+    class DayOfWeek(models.IntegerChoices):
+        """Enum for days of the week (matching Python's datetime.weekday())."""
+        MONDAY = 0, "دوشنبه"
+        TUESDAY = 1, "سه‌شنبه"
+        WEDNESDAY = 2, "چهارشنبه"
+        THURSDAY = 3, "پنجشنبه"
+        FRIDAY = 4, "جمعه"
+        SATURDAY = 5, "شنبه"
+        SUNDAY = 6, "یکشنبه"
+
+    day = models.IntegerField(choices=DayOfWeek.choices, verbose_name="روز هفته")
+    shifts = models.ManyToManyField(Shift, verbose_name="شیفت‌ها")
+
+    class Meta:
+        """Meta configuration for WorkingDay."""
+        verbose_name = "روز کاری"
+        verbose_name_plural = "روزهای کاری"
+        unique_together = ("day",)  # Only one record per day
+
+    def __str__(self) -> str:
+        """Return string representation of the working day."""
+        return self.get_day_display()  # type: ignore[attr-defined]

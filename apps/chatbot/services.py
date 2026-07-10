@@ -6,7 +6,7 @@ from django.utils import timezone
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from apps.chatbot.models import BotPersona, PromptTemplate
+from apps.chatbot.models import BotPersona, PromptTemplate, WorkingDay
 from apps.leads.models import Lead
 from config.llm_config import get_llm
 
@@ -80,3 +80,22 @@ def generate_welcome_message(
     except Exception as e:
         logger.error("Failed to generate welcome message via LLM: %s", e)
         return fallback_msg
+
+
+def is_within_working_hours() -> bool:
+    """
+    Check if the current time falls within any defined working shift.
+    """
+    now = timezone.now()
+    current_day = now.weekday()  # Monday is 0 and Sunday is 6 (direct match)
+    current_time = now.time()
+
+    try:
+        working_day = WorkingDay.objects.get(day=current_day)
+        for shift in working_day.shifts.all():
+            if shift.start_time <= current_time <= shift.end_time:
+                return True
+    except WorkingDay.DoesNotExist:
+        return False
+        
+    return False
