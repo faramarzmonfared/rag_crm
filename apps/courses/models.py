@@ -11,6 +11,7 @@ class Department(models.Model):
         """Meta configuration for Department."""
         verbose_name = "دپارتمان"
         verbose_name_plural = "دپارتمان‌ها"
+        db_table = "departments"
 
     def __str__(self) -> str:
         """Return string representation of the department."""
@@ -63,6 +64,7 @@ class Course(models.Model):
         """Meta configuration for Course."""
         verbose_name = "دوره"
         verbose_name_plural = "دوره‌ها"
+        db_table = "courses"
 
     def __str__(self) -> str:
         """Return string representation of the course."""
@@ -84,6 +86,7 @@ class CourseDetail(models.Model):
         """Meta configuration for CourseDetail."""
         verbose_name = "جزئیات دوره"
         verbose_name_plural = "جزئیات دوره‌ها"
+        db_table = "course_details"
 
     def __str__(self) -> str:
         """Return string representation of the course detail."""
